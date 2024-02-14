@@ -211,6 +211,7 @@ clarifai = ["clarifai"]
 cohere = ["cohere"]
 docarray = ["docarray"]
 embeddings = ["sentence-transformers"]
+google = ["google-ai-generativelanguage"]
 javascript = ["esprima"]
 azure = [
     "azure-identity",
@@ -238,6 +239,7 @@ extended_testing = [
  "cassio",
  "chardet",
  "datasets",
+ "google-ai-generativelanguage",
  "google-cloud-documentai",
  "esprima",
  "jq",
