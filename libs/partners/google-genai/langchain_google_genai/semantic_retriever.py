@@ -23,7 +23,14 @@ from typing import (
 
 from langchain.schema.document import Document
 from langchain.schema.embeddings import Embeddings
+from langchain.schema.runnable import Runnable, RunnableLambda, RunnablePassthrough
 from langchain.schema.vectorstore import VectorStore
+
+from .aqa_model import (
+    AqaModelInput,
+    AqaModelOutput,
+    GenAIAqa,
+)
 
 VST = TypeVar("VST", bound="GoogleVectorStore")
 _import_err_msg = (
@@ -66,10 +73,18 @@ class GoogleVectorStore(VectorStore):
         store = GoogleVectorStore.create_corpus(
             corpus_id="123", display_name="My Google corpus")
 
-    Example: Query the corpus.
+    Example: Query the corpus for relevant passages.
 
         store.as_retriever() \
             .get_relevant_documents("Who caught the gingerbread man?")
+
+    Example: Ask the corpus for grounded responses!
+
+        aqa = store.as_aqa()
+        response = aqa.invoke("Who caught the gingerbread man?")
+        print(response.answer)
+        print(response.attributed_passages)
+        print(response.answerability_probability)
 
     You can also operate at Google's Document level.
 
@@ -110,7 +125,7 @@ class GoogleVectorStore(VectorStore):
                 `create_document` to create one.
         """
         try:
-            from .semantic_retriever import SemanticRetriever
+            from ._semantic_retriever_internal import SemanticRetriever
         except ImportError:
             raise ImportError(_import_err_msg)
 
@@ -135,7 +150,7 @@ class GoogleVectorStore(VectorStore):
             An instance of vector store that points to the newly created corpus.
         """
         try:
-            import langchain.vectorstores.google.generativeai.genai_extension as genaix
+            from . import _genai_extension as genaix
         except ImportError:
             raise ImportError(_import_err_msg)
 
@@ -170,7 +185,7 @@ class GoogleVectorStore(VectorStore):
             document.
         """
         try:
-            import langchain.vectorstores.google.generativeai.genai_extension as genaix
+            from . import _genai_extension as genaix
         except ImportError:
             raise ImportError(_import_err_msg)
 
@@ -231,7 +246,7 @@ class GoogleVectorStore(VectorStore):
         corpus or document via Google Generative AI API.
         """
         try:
-            from .semantic_retriever import SemanticRetriever
+            from ._semantic_retriever_internal import SemanticRetriever
         except ImportError:
             raise ImportError(_import_err_msg)
 
@@ -242,7 +257,7 @@ class GoogleVectorStore(VectorStore):
     def corpus_id(self) -> str:
         """Returns the corpus ID managed by this vector store."""
         try:
-            from .semantic_retriever import SemanticRetriever
+            from ._semantic_retriever_internal import SemanticRetriever
         except ImportError:
             raise ImportError(_import_err_msg)
 
@@ -254,7 +269,7 @@ class GoogleVectorStore(VectorStore):
     def document_id(self) -> Optional[str]:
         """Returns the document ID managed by this vector store."""
         try:
-            from .semantic_retriever import SemanticRetriever
+            from ._semantic_retriever_internal import SemanticRetriever
         except ImportError:
             raise ImportError(_import_err_msg)
 
@@ -279,7 +294,7 @@ class GoogleVectorStore(VectorStore):
             Chunk's names created on Google servers.
         """
         try:
-            from .semantic_retriever import SemanticRetriever
+            from ._semantic_retriever_internal import SemanticRetriever
         except ImportError:
             raise ImportError(_import_err_msg)
 
@@ -310,7 +325,7 @@ class GoogleVectorStore(VectorStore):
     ) -> List[Tuple[Document, float]]:
         """Run similarity search with distance."""
         try:
-            from .semantic_retriever import SemanticRetriever
+            from ._semantic_retriever_internal import SemanticRetriever
         except ImportError:
             raise ImportError(_import_err_msg)
 
@@ -330,7 +345,7 @@ class GoogleVectorStore(VectorStore):
             True if successful. Otherwise, you should get an exception anyway.
         """
         try:
-            from .semantic_retriever import SemanticRetriever
+            from ._semantic_retriever_internal import SemanticRetriever
         except ImportError:
             raise ImportError(_import_err_msg)
 
@@ -351,3 +366,42 @@ class GoogleVectorStore(VectorStore):
         i.e. one in [0, 1] where higher means more *similar*.
         """
         return lambda score: score
+
+    def as_aqa(self, **kwargs: Any) -> Runnable[str, AqaModelOutput]:
+        """Construct a Google Generative AI AQA engine.
+
+        All arguments are optional.
+
+        Args:
+            answer_style: See
+              `google.ai.generativelanguage.GenerateAnswerRequest.AnswerStyle`.
+            safety_settings: See `google.ai.generativelanguage.SafetySetting`.
+            temperature: 0.0 to 1.0.
+        """
+        return (
+            RunnablePassthrough[str]()
+            | {
+                "prompt": RunnablePassthrough(),
+                "passages": self.as_retriever(),
+            }
+            | RunnableLambda(_toAqaInput)
+            | GenAIAqa(**kwargs)
+        )
+
+
+def _toAqaInput(input: Dict[str, Any]) -> AqaModelInput:
+    prompt = input["prompt"]
+    assert isinstance(prompt, str)
+
+    passages = input["passages"]
+    assert isinstance(passages, list)
+
+    source_passages: List[str] = []
+    for passage in passages:
+        assert isinstance(passage, Document)
+        source_passages.append(passage.page_content)
+
+    return AqaModelInput(
+        prompt=prompt,
+        source_passages=source_passages,
+    )

@@ -10,13 +10,14 @@ except ImportError:
     has_google = False
 
 from langchain.schema.document import Document
-from langchain.vectorstores.google.generativeai import GoogleVectorStore
+
+from langchain_google_genai import GoogleVectorStore
 
 if has_google:
-    import langchain.vectorstores.google.generativeai.genai_extension as genaix
+    from langchain_google_genai import _genai_extension as genaix
 
     # Make sure the tests do not hit actual production servers.
-    genaix.set_defaults(
+    genaix.set_config(
         genaix.Config(
             api_endpoint="No-such-endpoint-to-prevent-hitting-real-backend",
             testing=True,
@@ -389,3 +390,60 @@ def test_delete(
     assert delete_chunk_request_2 == genai.DeleteChunkRequest(
         name="corpora/123/documents/456/chunks/1002",
     )
+
+
+@pytest.mark.requires("google.ai.generativelanguage")
+@patch("google.ai.generativelanguage.GenerativeServiceClient.generate_answer")
+@patch("google.ai.generativelanguage.RetrieverServiceClient.query_corpus")
+@patch("google.ai.generativelanguage.RetrieverServiceClient.get_corpus")
+def test_aqa(
+    mock_get_corpus: MagicMock,
+    mock_query_corpus: MagicMock,
+    mock_generate_answer: MagicMock,
+) -> None:
+    # Arrange
+    mock_get_corpus.return_value = genai.Corpus(name="corpora/123")
+    mock_query_corpus.return_value = genai.QueryCorpusResponse(
+        relevant_chunks=[
+            genai.RelevantChunk(
+                chunk=genai.Chunk(
+                    name="corpora/123/documents/456/chunks/789",
+                    data=genai.ChunkData(string_value="42"),
+                ),
+                chunk_relevance_score=0.9,
+            )
+        ]
+    )
+    mock_generate_answer.return_value = genai.GenerateAnswerResponse(
+        answer=genai.Candidate(
+            content=genai.Content(parts=[genai.Part(text="42")]),
+            grounding_attributions=[
+                genai.GroundingAttribution(
+                    content=genai.Content(
+                        parts=[genai.Part(text="Meaning of life is 42.")]
+                    ),
+                    source_id=genai.AttributionSourceId(
+                        grounding_passage=genai.AttributionSourceId.GroundingPassageId(
+                            passage_id="corpora/123/documents/456/chunks/789",
+                            part_index=0,
+                        )
+                    ),
+                ),
+            ],
+            finish_reason=genai.Candidate.FinishReason.STOP,
+        ),
+        answerable_probability=0.7,
+    )
+
+    # Act
+    store = GoogleVectorStore(corpus_id="123")
+    aqa = store.as_aqa(answer_style=genai.GenerateAnswerRequest.AnswerStyle.EXTRACTIVE)
+    response = aqa.invoke("What is the meaning of life?")
+
+    # Assert
+    assert response.answer == "42"
+    assert response.attributed_passages == ["Meaning of life is 42."]
+    assert response.answerable_probability == pytest.approx(0.7)
+
+    request = mock_generate_answer.call_args.args[0]
+    assert request.answer_style == genai.GenerateAnswerRequest.AnswerStyle.EXTRACTIVE
